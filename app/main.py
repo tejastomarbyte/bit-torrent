@@ -84,10 +84,16 @@ def main():
         torrent_path = sys.argv[2]
         with open(torrent_path, "rb") as f:
             torrent = decode_bencode(f.read())
-        info_hash = hashlib.sha1(bencode(torrent['info'])).hexdigest()
+        info = torrent['info']
+        info_hash = hashlib.sha1(bencode(info)).hexdigest()
         print(f"Tracker URL: {torrent['announce'].decode()}")
-        print(f"Length: {torrent['info']['length']}")
+        print(f"Length: {info['length']}")
         print(f"Info Hash: {info_hash}")
+        print(f"Piece Length: {info['piece length']}")
+        print("Piece Hashes:")
+        pieces = info['pieces']
+        for i in range(0, len(pieces), 20):
+            print(pieces[i:i+20].hex())
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
