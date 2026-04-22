@@ -57,18 +57,18 @@ def main():
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
 
-        # json.dumps() can't handle bytes, but bencoded "strings" need to be
-        # bytestrings since they might contain non utf-8 characters.
-        #
-        # Let's convert them to strings for printing to the console.
         def bytes_to_str(data):
             if isinstance(data, bytes):
                 return data.decode()
-
             raise TypeError(f"Type not serializable: {type(data)}")
 
-        # TODO: Uncomment the code below to pass the first stage
         print(json.dumps(decode_bencode(bencoded_value), default=bytes_to_str))
+    elif command == "info":
+        torrent_path = sys.argv[2]
+        with open(torrent_path, "rb") as f:
+            torrent = decode_bencode(f.read())
+        print(f"Tracker URL: {torrent['announce'].decode()}")
+        print(f"Length: {torrent['info']['length']}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
