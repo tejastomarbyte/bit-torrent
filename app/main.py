@@ -9,18 +9,33 @@ import sys
 # - decode_bencode(b"5:hello") -> b"hello"
 # - decode_bencode(b"10:hello12345") -> b"hello12345"
 def decode_bencode(bencoded_value):
-    if chr(bencoded_value[0]).isdigit():
-        first_colon_index = bencoded_value.find(b":")
-        if first_colon_index == -1:
-            raise ValueError("Invalid encoded value")
-        return bencoded_value[first_colon_index+1:]
-    elif bencoded_value[0:1] == b"i":
-        end_index = bencoded_value.find(b"e")
-        if end_index == -1:
+    value, _ = _decode(bencoded_value)
+    return value
+
+
+def _decode(data):
+    if chr(data[0]).isdigit():
+        colon = data.find(b":")
+        if colon == -1:
+            raise ValueError("Invalid encoded string")
+        length = int(data[:colon])
+        start = colon + 1
+        return data[start:start + length], start + length
+    elif data[0:1] == b"i":
+        end = data.find(b"e")
+        if end == -1:
             raise ValueError("Invalid encoded integer")
-        return int(bencoded_value[1:end_index])
+        return int(data[1:end]), end + 1
+    elif data[0:1] == b"l":
+        items = []
+        pos = 1
+        while data[pos:pos+1] != b"e":
+            item, consumed = _decode(data[pos:])
+            items.append(item)
+            pos += consumed
+        return items, pos + 1
     else:
-        raise NotImplementedError("Only strings and integers are supported at the moment")
+        raise NotImplementedError("Unsupported bencode type")
 
 
 def main():
