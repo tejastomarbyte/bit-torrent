@@ -34,6 +34,16 @@ def _decode(data):
             items.append(item)
             pos += consumed
         return items, pos + 1
+    elif data[0:1] == b"d":
+        result = {}
+        pos = 1
+        while data[pos:pos+1] != b"e":
+            key, consumed = _decode(data[pos:])
+            pos += consumed
+            value, consumed = _decode(data[pos:])
+            pos += consumed
+            result[key.decode()] = value
+        return result, pos + 1
     else:
         raise NotImplementedError("Unsupported bencode type")
 
