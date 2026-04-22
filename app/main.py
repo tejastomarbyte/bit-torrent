@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 
@@ -8,6 +9,22 @@ import sys
 #
 # - decode_bencode(b"5:hello") -> b"hello"
 # - decode_bencode(b"10:hello12345") -> b"hello12345"
+def bencode(value):
+    if isinstance(value, bytes):
+        return str(len(value)).encode() + b":" + value
+    elif isinstance(value, int):
+        return b"i" + str(value).encode() + b"e"
+    elif isinstance(value, list):
+        return b"l" + b"".join(bencode(i) for i in value) + b"e"
+    elif isinstance(value, dict):
+        encoded = b"d"
+        for k in sorted(value.keys()):
+            encoded += bencode(k.encode() if isinstance(k, str) else k)
+            encoded += bencode(value[k])
+        return encoded + b"e"
+    raise TypeError(f"Unsupported type: {type(value)}")
+
+
 def decode_bencode(bencoded_value):
     value, _ = _decode(bencoded_value)
     return value
@@ -67,8 +84,10 @@ def main():
         torrent_path = sys.argv[2]
         with open(torrent_path, "rb") as f:
             torrent = decode_bencode(f.read())
+        info_hash = hashlib.sha1(bencode(torrent['info'])).hexdigest()
         print(f"Tracker URL: {torrent['announce'].decode()}")
         print(f"Length: {torrent['info']['length']}")
+        print(f"Info Hash: {info_hash}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
