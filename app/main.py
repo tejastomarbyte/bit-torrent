@@ -1,6 +1,9 @@
 import hashlib
 import json
+import struct
 import sys
+import urllib.parse
+import urllib.request
 
 # import bencodepy - available if you need it!
 # import requests - available if you need it!
@@ -94,6 +97,29 @@ def main():
         pieces = info['pieces']
         for i in range(0, len(pieces), 20):
             print(pieces[i:i+20].hex())
+    elif command == "peers":
+        torrent_path = sys.argv[2]
+        with open(torrent_path, "rb") as f:
+            torrent = decode_bencode(f.read())
+        info = torrent['info']
+        info_hash = hashlib.sha1(bencode(info)).digest()
+        params = urllib.parse.urlencode({
+            "info_hash": info_hash,
+            "peer_id": "00112233445566778899",
+            "port": 6881,
+            "uploaded": 0,
+            "downloaded": 0,
+            "left": info['length'],
+            "compact": 1,
+        })
+        url = torrent['announce'].decode() + "?" + params
+        with urllib.request.urlopen(url) as resp:
+            response = decode_bencode(resp.read())
+        peers_bytes = response['peers']
+        for i in range(0, len(peers_bytes), 6):
+            ip = ".".join(str(b) for b in peers_bytes[i:i+4])
+            port = struct.unpack("!H", peers_bytes[i+4:i+6])[0]
+            print(f"{ip}:{port}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
