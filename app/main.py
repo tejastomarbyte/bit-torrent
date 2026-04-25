@@ -113,6 +113,31 @@ def parse_magnet(magnet):
     return info_hash, info_hash_hex, tracker_url
 
 
+def fetch_info_from_peer(sock, info_hash):
+    """Perform extension handshake and fetch info dict via ut_metadata. Returns info dict."""
+    while True:
+        msg_id, _ = recv_msg(sock)
+        if msg_id == 5:
+            break
+    send_msg(sock, 20, b"\x00" + bencode({"m": {"ut_metadata": 1}}))
+    while True:
+        msg_id, payload = recv_msg(sock)
+        if msg_id == 20:
+            break
+    ext_hs = decode_bencode(payload[1:])
+    peer_ut_metadata_id = ext_hs['m']['ut_metadata']
+    send_msg(sock, 20, bytes([peer_ut_metadata_id]) + bencode({"msg_type": 0, "piece": 0}))
+    while True:
+        msg_id, payload = recv_msg(sock)
+        if msg_id == 20:
+            break
+    data_payload = payload[1:]
+    _, consumed = _decode(data_payload)
+    info_bytes = data_payload[consumed:]
+    assert hashlib.sha1(info_bytes).digest() == info_hash, "Metadata hash mismatch"
+    return decode_bencode(info_bytes)
+
+
 def get_peers_from_magnet(info_hash, tracker_url):
     params = urllib.parse.urlencode({
         "info_hash": info_hash,
@@ -313,33 +338,9 @@ def main():
         peer_ip, peer_port = get_peers_from_magnet(info_hash, tracker_url)[0]
         with socket.create_connection((peer_ip, peer_port)) as sock:
             hs = do_handshake(sock, info_hash, reserved=EXTENSION_RESERVED)
-            peer_reserved = hs[8:16]
-            if not (peer_reserved[5] & 0x10):
+            if not (hs[8:16][5] & 0x10):
                 raise RuntimeError("Peer does not support extensions")
-            while True:
-                msg_id, _ = recv_msg(sock)
-                if msg_id == 5:
-                    break
-            ext_payload = b"\x00" + bencode({"m": {"ut_metadata": 1}})
-            send_msg(sock, 20, ext_payload)
-            while True:
-                msg_id, payload = recv_msg(sock)
-                if msg_id == 20:
-                    break
-            ext_hs = decode_bencode(payload[1:])
-            peer_ut_metadata_id = ext_hs['m']['ut_metadata']
-            req_payload = bytes([peer_ut_metadata_id]) + bencode({"msg_type": 0, "piece": 0})
-            send_msg(sock, 20, req_payload)
-            while True:
-                msg_id, payload = recv_msg(sock)
-                if msg_id == 20:
-                    break
-        # payload[0] is extension msg id; rest is bencoded header + raw info bytes
-        data_payload = payload[1:]
-        _, consumed = _decode(data_payload)  # skip the bencoded header dict
-        info_bytes = data_payload[consumed:]
-        assert hashlib.sha1(info_bytes).digest() == info_hash, "Metadata hash mismatch"
-        info = decode_bencode(info_bytes)
+            info = fetch_info_from_peer(sock, info_hash)
         print(f"Tracker URL: {tracker_url}")
         print(f"Length: {info['length']}")
         print(f"Info Hash: {info_hash.hex()}")
@@ -348,6 +349,26 @@ def main():
         pieces = info['pieces']
         for i in range(0, len(pieces), 20):
             print(pieces[i:i+20].hex())
+    elif command == "magnet_download_piece":
+        output_path = sys.argv[3]
+        magnet = sys.argv[4]
+        piece_index = int(sys.argv[5])
+        info_hash, _, tracker_url = parse_magnet(magnet)
+        peer_ip, peer_port = get_peers_from_magnet(info_hash, tracker_url)[0]
+        with socket.create_connection((peer_ip, peer_port)) as sock:
+            hs = do_handshake(sock, info_hash, reserved=EXTENSION_RESERVED)
+            if not (hs[8:16][5] & 0x10):
+                raise RuntimeError("Peer does not support extensions")
+            info = fetch_info_from_peer(sock, info_hash)
+            send_msg(sock, 2)  # interested
+            while True:
+                msg_id, _ = recv_msg(sock)
+                if msg_id == 1:
+                    break
+            piece_data = download_piece_from_sock(sock, piece_index, info['piece length'], info['length'], info['pieces'])
+        with open(output_path, "wb") as f:
+            f.write(piece_data)
+        print(f"Piece {piece_index} downloaded to {output_path}.")
     elif command == "magnet_parse":
         magnet = sys.argv[2]
         qs = urllib.parse.urlparse(magnet).query
