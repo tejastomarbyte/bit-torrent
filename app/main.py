@@ -95,10 +95,44 @@ def send_msg(sock, msg_id, payload=b""):
     sock.sendall(struct.pack("!IB", 1 + len(payload), msg_id) + payload)
 
 
-def do_handshake(sock, info_hash):
+EXTENSION_RESERVED = b"\x00\x00\x00\x00\x00\x10\x00\x00"
+
+
+def do_handshake(sock, info_hash, reserved=b"\x00" * 8):
     peer_id = b"00112233445566778899"
-    sock.sendall(b"\x13BitTorrent protocol" + b"\x00" * 8 + info_hash + peer_id)
+    sock.sendall(b"\x13BitTorrent protocol" + reserved + info_hash + peer_id)
     return recv_all(sock, 68)
+
+
+def parse_magnet(magnet):
+    qs = urllib.parse.urlparse(magnet).query
+    params = urllib.parse.parse_qs(qs)
+    info_hash_hex = params["xt"][0].removeprefix("urn:btih:")
+    info_hash = bytes.fromhex(info_hash_hex)
+    tracker_url = urllib.parse.unquote(params["tr"][0])
+    return info_hash, info_hash_hex, tracker_url
+
+
+def get_peers_from_magnet(info_hash, tracker_url):
+    params = urllib.parse.urlencode({
+        "info_hash": info_hash,
+        "peer_id": "00112233445566778899",
+        "port": 6881,
+        "uploaded": 0,
+        "downloaded": 0,
+        "left": 999,
+        "compact": 1,
+    })
+    url = tracker_url + "?" + params
+    with urllib.request.urlopen(url) as resp:
+        response = decode_bencode(resp.read())
+    peers_bytes = response['peers']
+    peers = []
+    for i in range(0, len(peers_bytes), 6):
+        ip = ".".join(str(b) for b in peers_bytes[i:i+4])
+        port = struct.unpack("!H", peers_bytes[i+4:i+6])[0]
+        peers.append((ip, port))
+    return peers
 
 
 def download_piece_from_sock(sock, piece_index, piece_length, total_length, pieces):
@@ -248,6 +282,13 @@ def main():
             for piece_data in all_pieces:
                 f.write(piece_data)
         print(f"Downloaded {torrent_path} to {output_path}.")
+    elif command == "magnet_handshake":
+        magnet = sys.argv[2]
+        info_hash, _, tracker_url = parse_magnet(magnet)
+        peer_ip, peer_port = get_peers_from_magnet(info_hash, tracker_url)[0]
+        with socket.create_connection((peer_ip, peer_port)) as sock:
+            resp = do_handshake(sock, info_hash, reserved=EXTENSION_RESERVED)
+        print(f"Peer ID: {resp[48:68].hex()}")
     elif command == "magnet_parse":
         magnet = sys.argv[2]
         qs = urllib.parse.urlparse(magnet).query
