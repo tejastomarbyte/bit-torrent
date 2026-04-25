@@ -248,6 +248,14 @@ def main():
             for piece_data in all_pieces:
                 f.write(piece_data)
         print(f"Downloaded {torrent_path} to {output_path}.")
+    elif command == "magnet_parse":
+        magnet = sys.argv[2]
+        qs = urllib.parse.urlparse(magnet).query
+        params = urllib.parse.parse_qs(qs)
+        info_hash = params["xt"][0].removeprefix("urn:btih:")
+        tracker_url = urllib.parse.unquote(params["tr"][0])
+        print(f"Tracker URL: {tracker_url}")
+        print(f"Info Hash: {info_hash}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
