@@ -101,6 +101,28 @@ def do_handshake(sock, info_hash):
     return recv_all(sock, 68)
 
 
+def download_piece_from_sock(sock, piece_index, piece_length, total_length, pieces):
+    actual_length = min(piece_length, total_length - piece_index * piece_length)
+    offset = 0
+    while offset < actual_length:
+        block_len = min(BLOCK_SIZE, actual_length - offset)
+        send_msg(sock, 6, struct.pack("!III", piece_index, offset, block_len))
+        offset += block_len
+    piece_data = bytearray(actual_length)
+    received = 0
+    while received < actual_length:
+        msg_id, payload = recv_msg(sock)
+        if msg_id != 7:
+            continue
+        begin = struct.unpack("!II", payload[:8])[1]
+        block = payload[8:]
+        piece_data[begin:begin + len(block)] = block
+        received += len(block)
+    expected_hash = pieces[piece_index * 20:(piece_index + 1) * 20]
+    assert hashlib.sha1(piece_data).digest() == expected_hash, f"Hash mismatch for piece {piece_index}"
+    return bytes(piece_data)
+
+
 def get_peers(torrent):
     info = torrent['info']
     info_hash = hashlib.sha1(bencode(info)).digest()
@@ -177,55 +199,55 @@ def main():
             torrent = decode_bencode(f.read())
         info = torrent['info']
         info_hash = hashlib.sha1(bencode(info)).digest()
-        piece_length = info['piece length']
-        total_length = info['length']
-        pieces = info['pieces']
-        actual_length = min(piece_length, total_length - piece_index * piece_length)
-
         peer_ip, peer_port = get_peers(torrent)[0]
         with socket.create_connection((peer_ip, peer_port)) as sock:
             do_handshake(sock, info_hash)
-
-            # wait for bitfield
             while True:
                 msg_id, _ = recv_msg(sock)
                 if msg_id == 5:
                     break
-
-            # interested
             send_msg(sock, 2)
-
-            # wait for unchoke
             while True:
                 msg_id, _ = recv_msg(sock)
                 if msg_id == 1:
                     break
-
-            # request all blocks
-            offset = 0
-            while offset < actual_length:
-                block_len = min(BLOCK_SIZE, actual_length - offset)
-                send_msg(sock, 6, struct.pack("!III", piece_index, offset, block_len))
-                offset += block_len
-
-            # receive all blocks
-            piece_data = bytearray(actual_length)
-            received = 0
-            while received < actual_length:
-                msg_id, payload = recv_msg(sock)
-                if msg_id != 7:
-                    continue
-                begin = struct.unpack("!II", payload[:8])[1]
-                block = payload[8:]
-                piece_data[begin:begin + len(block)] = block
-                received += len(block)
-
-        expected_hash = pieces[piece_index * 20:(piece_index + 1) * 20]
-        assert hashlib.sha1(piece_data).digest() == expected_hash, "Hash mismatch"
-
+            piece_data = download_piece_from_sock(sock, piece_index, info['piece length'], info['length'], info['pieces'])
         with open(output_path, "wb") as f:
             f.write(piece_data)
         print(f"Piece {piece_index} downloaded to {output_path}.")
+    elif command == "download":
+        output_path = sys.argv[3]
+        torrent_path = sys.argv[4]
+        with open(torrent_path, "rb") as f:
+            torrent = decode_bencode(f.read())
+        info = torrent['info']
+        info_hash = hashlib.sha1(bencode(info)).digest()
+        piece_length = info['piece length']
+        total_length = info['length']
+        pieces = info['pieces']
+        num_pieces = len(pieces) // 20
+
+        peer_ip, peer_port = get_peers(torrent)[0]
+        with socket.create_connection((peer_ip, peer_port)) as sock:
+            do_handshake(sock, info_hash)
+            while True:
+                msg_id, _ = recv_msg(sock)
+                if msg_id == 5:
+                    break
+            send_msg(sock, 2)
+            while True:
+                msg_id, _ = recv_msg(sock)
+                if msg_id == 1:
+                    break
+            all_pieces = []
+            for i in range(num_pieces):
+                piece_data = download_piece_from_sock(sock, i, piece_length, total_length, pieces)
+                all_pieces.append(piece_data)
+
+        with open(output_path, "wb") as f:
+            for piece_data in all_pieces:
+                f.write(piece_data)
+        print(f"Downloaded {torrent_path} to {output_path}.")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
