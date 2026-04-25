@@ -300,10 +300,13 @@ def main():
                 send_msg(sock, 20, ext_payload)
                 # receive extension handshake
                 while True:
-                    msg_id, _ = recv_msg(sock)
+                    msg_id, payload = recv_msg(sock)
                     if msg_id == 20:
                         break
+                ext_hs = decode_bencode(payload[1:])  # skip 1-byte extension msg id
+                peer_ut_metadata_id = ext_hs['m']['ut_metadata']
         print(f"Peer ID: {hs[48:68].hex()}")
+        print(f"Peer Metadata Extension ID: {peer_ut_metadata_id}")
     elif command == "magnet_parse":
         magnet = sys.argv[2]
         qs = urllib.parse.urlparse(magnet).query
