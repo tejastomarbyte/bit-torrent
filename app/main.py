@@ -369,6 +369,30 @@ def main():
         with open(output_path, "wb") as f:
             f.write(piece_data)
         print(f"Piece {piece_index} downloaded to {output_path}.")
+    elif command == "magnet_download":
+        output_path = sys.argv[3]
+        magnet = sys.argv[4]
+        info_hash, _, tracker_url = parse_magnet(magnet)
+        peer_ip, peer_port = get_peers_from_magnet(info_hash, tracker_url)[0]
+        with socket.create_connection((peer_ip, peer_port)) as sock:
+            hs = do_handshake(sock, info_hash, reserved=EXTENSION_RESERVED)
+            if not (hs[8:16][5] & 0x10):
+                raise RuntimeError("Peer does not support extensions")
+            info = fetch_info_from_peer(sock, info_hash)
+            send_msg(sock, 2)  # interested
+            while True:
+                msg_id, _ = recv_msg(sock)
+                if msg_id == 1:
+                    break
+            num_pieces = len(info['pieces']) // 20
+            all_pieces = []
+            for i in range(num_pieces):
+                piece_data = download_piece_from_sock(sock, i, info['piece length'], info['length'], info['pieces'])
+                all_pieces.append(piece_data)
+        with open(output_path, "wb") as f:
+            for piece_data in all_pieces:
+                f.write(piece_data)
+        print(f"Downloaded to {output_path}.")
     elif command == "magnet_parse":
         magnet = sys.argv[2]
         qs = urllib.parse.urlparse(magnet).query
