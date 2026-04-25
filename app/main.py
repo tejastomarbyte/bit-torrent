@@ -328,14 +328,26 @@ def main():
                     break
             ext_hs = decode_bencode(payload[1:])
             peer_ut_metadata_id = ext_hs['m']['ut_metadata']
-            # send metadata request
             req_payload = bytes([peer_ut_metadata_id]) + bencode({"msg_type": 0, "piece": 0})
             send_msg(sock, 20, req_payload)
-            # receive metadata data message (next stage will process this)
             while True:
                 msg_id, payload = recv_msg(sock)
                 if msg_id == 20:
                     break
+        # payload[0] is extension msg id; rest is bencoded header + raw info bytes
+        data_payload = payload[1:]
+        _, consumed = _decode(data_payload)  # skip the bencoded header dict
+        info_bytes = data_payload[consumed:]
+        assert hashlib.sha1(info_bytes).digest() == info_hash, "Metadata hash mismatch"
+        info = decode_bencode(info_bytes)
+        print(f"Tracker URL: {tracker_url}")
+        print(f"Length: {info['length']}")
+        print(f"Info Hash: {info_hash.hex()}")
+        print(f"Piece Length: {info['piece length']}")
+        print("Piece Hashes:")
+        pieces = info['pieces']
+        for i in range(0, len(pieces), 20):
+            print(pieces[i:i+20].hex())
     elif command == "magnet_parse":
         magnet = sys.argv[2]
         qs = urllib.parse.urlparse(magnet).query
