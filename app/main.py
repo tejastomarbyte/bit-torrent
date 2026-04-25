@@ -307,6 +307,35 @@ def main():
                 peer_ut_metadata_id = ext_hs['m']['ut_metadata']
         print(f"Peer ID: {hs[48:68].hex()}")
         print(f"Peer Metadata Extension ID: {peer_ut_metadata_id}")
+    elif command == "magnet_info":
+        magnet = sys.argv[2]
+        info_hash, _, tracker_url = parse_magnet(magnet)
+        peer_ip, peer_port = get_peers_from_magnet(info_hash, tracker_url)[0]
+        with socket.create_connection((peer_ip, peer_port)) as sock:
+            hs = do_handshake(sock, info_hash, reserved=EXTENSION_RESERVED)
+            peer_reserved = hs[8:16]
+            if not (peer_reserved[5] & 0x10):
+                raise RuntimeError("Peer does not support extensions")
+            while True:
+                msg_id, _ = recv_msg(sock)
+                if msg_id == 5:
+                    break
+            ext_payload = b"\x00" + bencode({"m": {"ut_metadata": 1}})
+            send_msg(sock, 20, ext_payload)
+            while True:
+                msg_id, payload = recv_msg(sock)
+                if msg_id == 20:
+                    break
+            ext_hs = decode_bencode(payload[1:])
+            peer_ut_metadata_id = ext_hs['m']['ut_metadata']
+            # send metadata request
+            req_payload = bytes([peer_ut_metadata_id]) + bencode({"msg_type": 0, "piece": 0})
+            send_msg(sock, 20, req_payload)
+            # receive metadata data message (next stage will process this)
+            while True:
+                msg_id, payload = recv_msg(sock)
+                if msg_id == 20:
+                    break
     elif command == "magnet_parse":
         magnet = sys.argv[2]
         qs = urllib.parse.urlparse(magnet).query
