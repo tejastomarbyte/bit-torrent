@@ -287,8 +287,23 @@ def main():
         info_hash, _, tracker_url = parse_magnet(magnet)
         peer_ip, peer_port = get_peers_from_magnet(info_hash, tracker_url)[0]
         with socket.create_connection((peer_ip, peer_port)) as sock:
-            resp = do_handshake(sock, info_hash, reserved=EXTENSION_RESERVED)
-        print(f"Peer ID: {resp[48:68].hex()}")
+            hs = do_handshake(sock, info_hash, reserved=EXTENSION_RESERVED)
+            peer_reserved = hs[8:16]
+            if peer_reserved[5] & 0x10:
+                # wait for bitfield
+                while True:
+                    msg_id, _ = recv_msg(sock)
+                    if msg_id == 5:
+                        break
+                # send extension handshake
+                ext_payload = b"\x00" + bencode({"m": {"ut_metadata": 1}})
+                send_msg(sock, 20, ext_payload)
+                # receive extension handshake
+                while True:
+                    msg_id, _ = recv_msg(sock)
+                    if msg_id == 20:
+                        break
+        print(f"Peer ID: {hs[48:68].hex()}")
     elif command == "magnet_parse":
         magnet = sys.argv[2]
         qs = urllib.parse.urlparse(magnet).query
