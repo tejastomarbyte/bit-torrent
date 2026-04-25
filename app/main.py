@@ -69,6 +69,62 @@ def _decode(data):
         raise NotImplementedError("Unsupported bencode type")
 
 
+BLOCK_SIZE = 16 * 1024
+
+
+def recv_all(sock, n):
+    data = b""
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise ConnectionError("Peer closed connection")
+        data += chunk
+    return data
+
+
+def recv_msg(sock):
+    length = struct.unpack("!I", recv_all(sock, 4))[0]
+    if length == 0:
+        return None, b""  # keep-alive
+    msg_id = struct.unpack("!B", recv_all(sock, 1))[0]
+    payload = recv_all(sock, length - 1)
+    return msg_id, payload
+
+
+def send_msg(sock, msg_id, payload=b""):
+    sock.sendall(struct.pack("!IB", 1 + len(payload), msg_id) + payload)
+
+
+def do_handshake(sock, info_hash):
+    peer_id = b"00112233445566778899"
+    sock.sendall(b"\x13BitTorrent protocol" + b"\x00" * 8 + info_hash + peer_id)
+    return recv_all(sock, 68)
+
+
+def get_peers(torrent):
+    info = torrent['info']
+    info_hash = hashlib.sha1(bencode(info)).digest()
+    params = urllib.parse.urlencode({
+        "info_hash": info_hash,
+        "peer_id": "00112233445566778899",
+        "port": 6881,
+        "uploaded": 0,
+        "downloaded": 0,
+        "left": info['length'],
+        "compact": 1,
+    })
+    url = torrent['announce'].decode() + "?" + params
+    with urllib.request.urlopen(url) as resp:
+        response = decode_bencode(resp.read())
+    peers_bytes = response['peers']
+    peers = []
+    for i in range(0, len(peers_bytes), 6):
+        ip = ".".join(str(b) for b in peers_bytes[i:i+4])
+        port = struct.unpack("!H", peers_bytes[i+4:i+6])[0]
+        peers.append((ip, port))
+    return peers
+
+
 def main():
     command = sys.argv[1]
 
@@ -102,46 +158,74 @@ def main():
         torrent_path = sys.argv[2]
         with open(torrent_path, "rb") as f:
             torrent = decode_bencode(f.read())
-        info = torrent['info']
-        info_hash = hashlib.sha1(bencode(info)).digest()
-        params = urllib.parse.urlencode({
-            "info_hash": info_hash,
-            "peer_id": "00112233445566778899",
-            "port": 6881,
-            "uploaded": 0,
-            "downloaded": 0,
-            "left": info['length'],
-            "compact": 1,
-        })
-        url = torrent['announce'].decode() + "?" + params
-        with urllib.request.urlopen(url) as resp:
-            response = decode_bencode(resp.read())
-        peers_bytes = response['peers']
-        for i in range(0, len(peers_bytes), 6):
-            ip = ".".join(str(b) for b in peers_bytes[i:i+4])
-            port = struct.unpack("!H", peers_bytes[i+4:i+6])[0]
+        for ip, port in get_peers(torrent):
             print(f"{ip}:{port}")
     elif command == "handshake":
         torrent_path = sys.argv[2]
-        peer_addr = sys.argv[3]
-        peer_ip, peer_port = peer_addr.rsplit(":", 1)
+        peer_ip, peer_port = sys.argv[3].rsplit(":", 1)
         with open(torrent_path, "rb") as f:
             torrent = decode_bencode(f.read())
         info_hash = hashlib.sha1(bencode(torrent['info'])).digest()
-        peer_id = b"00112233445566778899"
-        handshake = (
-            b"\x13BitTorrent protocol"
-            + b"\x00" * 8
-            + info_hash
-            + peer_id
-        )
         with socket.create_connection((peer_ip, int(peer_port))) as sock:
-            sock.sendall(handshake)
-            response = b""
-            while len(response) < 68:
-                response += sock.recv(68 - len(response))
-        received_peer_id = response[48:68]
-        print(f"Peer ID: {received_peer_id.hex()}")
+            resp = do_handshake(sock, info_hash)
+        print(f"Peer ID: {resp[48:68].hex()}")
+    elif command == "download_piece":
+        output_path = sys.argv[3]
+        torrent_path = sys.argv[4]
+        piece_index = int(sys.argv[5])
+        with open(torrent_path, "rb") as f:
+            torrent = decode_bencode(f.read())
+        info = torrent['info']
+        info_hash = hashlib.sha1(bencode(info)).digest()
+        piece_length = info['piece length']
+        total_length = info['length']
+        pieces = info['pieces']
+        actual_length = min(piece_length, total_length - piece_index * piece_length)
+
+        peer_ip, peer_port = get_peers(torrent)[0]
+        with socket.create_connection((peer_ip, peer_port)) as sock:
+            do_handshake(sock, info_hash)
+
+            # wait for bitfield
+            while True:
+                msg_id, _ = recv_msg(sock)
+                if msg_id == 5:
+                    break
+
+            # interested
+            send_msg(sock, 2)
+
+            # wait for unchoke
+            while True:
+                msg_id, _ = recv_msg(sock)
+                if msg_id == 1:
+                    break
+
+            # request all blocks
+            offset = 0
+            while offset < actual_length:
+                block_len = min(BLOCK_SIZE, actual_length - offset)
+                send_msg(sock, 6, struct.pack("!III", piece_index, offset, block_len))
+                offset += block_len
+
+            # receive all blocks
+            piece_data = bytearray(actual_length)
+            received = 0
+            while received < actual_length:
+                msg_id, payload = recv_msg(sock)
+                if msg_id != 7:
+                    continue
+                begin = struct.unpack("!II", payload[:8])[1]
+                block = payload[8:]
+                piece_data[begin:begin + len(block)] = block
+                received += len(block)
+
+        expected_hash = pieces[piece_index * 20:(piece_index + 1) * 20]
+        assert hashlib.sha1(piece_data).digest() == expected_hash, "Hash mismatch"
+
+        with open(output_path, "wb") as f:
+            f.write(piece_data)
+        print(f"Piece {piece_index} downloaded to {output_path}.")
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
