@@ -1,34 +1,66 @@
-[![progress-banner](https://backend.codecrafters.io/progress/bittorrent/e72026be-5b9a-4069-bd19-8df2852bcc89)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# BitTorrent Client
 
-This is a starting point for Python solutions to the
-["Build Your Own BitTorrent" Challenge](https://app.codecrafters.io/courses/bittorrent/overview).
+A fully functional BitTorrent client built from scratch in Python. Supports downloading files via `.torrent` files and magnet links, implementing the core BitTorrent protocol and extensions.
 
-In this challenge, you’ll build a BitTorrent client that's capable of parsing a
-.torrent file and downloading a file from a peer. Along the way, we’ll learn
-about how torrent files are structured, HTTP trackers, BitTorrent’s Peer
-Protocol, pipelining and more.
+## Features
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+- **Bencode** — custom parser and serializer for the bencode format used throughout the protocol
+- **Torrent file parsing** — extracts tracker URL, file length, piece length, and piece hashes from `.torrent` files
+- **HTTP tracker** — contacts trackers to discover peers using the compact peer format
+- **Peer handshake** — establishes TCP connections with peers and performs the BitTorrent handshake
+- **Piece downloading** — downloads individual pieces as 16 KiB blocks, with SHA-1 integrity verification
+- **Full file download** — downloads and assembles all pieces into the complete file
+- **Magnet link support** — parses magnet links and bootstraps torrent metadata directly from peers using the `ut_metadata` extension (BEP 9 / BEP 10)
 
-# Passing the first stage
-
-The entry point for your BitTorrent implementation is in `app/main.py`. Study
-and uncomment the relevant code, and push your changes to pass the first stage:
+## Usage
 
 ```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
+# Decode a bencoded value
+./your_program.sh decode <bencoded_value>
+
+# Print info from a torrent file
+./your_program.sh info <torrent_file>
+
+# List peers for a torrent
+./your_program.sh peers <torrent_file>
+
+# Perform a handshake with a peer
+./your_program.sh handshake <torrent_file> <peer_ip>:<peer_port>
+
+# Download a single piece
+./your_program.sh download_piece -o <output_path> <torrent_file> <piece_index>
+
+# Download the full file
+./your_program.sh download -o <output_path> <torrent_file>
+
+# Parse a magnet link
+./your_program.sh magnet_parse <magnet_link>
+
+# Handshake via magnet link (with extension protocol)
+./your_program.sh magnet_handshake <magnet_link>
+
+# Print info from a magnet link
+./your_program.sh magnet_info <magnet_link>
+
+# Download a single piece via magnet link
+./your_program.sh magnet_download_piece -o <output_path> <magnet_link> <piece_index>
+
+# Download the full file via magnet link
+./your_program.sh magnet_download -o <output_path> <magnet_link>
 ```
 
-Time to move on to the next stage!
+## Requirements
 
-# Stage 2 & beyond
+- Python 3.11+
+- [uv](https://github.com/astral-sh/uv)
 
-Note: This section is for stages 2 and beyond.
+```sh
+uv run app/main.py
+```
 
-1. Ensure you have `uv` installed locally
-1. Run `./your_program.sh` to run your program, which is implemented in
-   `app/main.py`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+## Implementation Details
+
+- Bencode decoder handles strings, integers, lists, and nested dictionaries
+- Piece integrity is verified using SHA-1 hashes before writing to disk
+- Extension protocol (BEP 10) support — negotiates `ut_metadata` extension ID per peer and fetches the info dictionary directly from peers when using magnet links
+- All TCP reads use length-prefixed framing with accumulation loops to handle partial reads
